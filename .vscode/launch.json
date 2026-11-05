@@ -1,0 +1,65 @@
+{
+  "version": "0.2.0",
+  "configurations": [
+    {
+      "name": "Daemon (foreground)",
+      "type": "debugpy",
+      "request": "launch",
+      "module": "smart_search_agents",
+      "args": ["daemon", "run"],
+      "cwd": "${workspaceFolder}",
+      "justMyCode": true
+    },
+    {
+      "name": "Daemon (no watcher, no schedule)",
+      "type": "debugpy",
+      "request": "launch",
+      "module": "smart_search_agents",
+      "args": ["daemon", "run", "--no-watch", "--no-schedule"],
+      "cwd": "${workspaceFolder}"
+    },
+    {
+      "name": "MCP server (HTTP :8766)",
+      "type": "debugpy",
+      "request": "launch",
+      "module": "smart_search_agents",
+      "args": ["mcp", "--http"],
+      "cwd": "${workspaceFolder}"
+    },
+    {
+      "name": "Ask agent (prompt)",
+      "type": "debugpy",
+      "request": "launch",
+      "module": "smart_search_agents",
+      "args": ["ask", "${input:question}"],
+      "cwd": "${workspaceFolder}"
+    },
+    {
+      "name": "Ask agent with Claude (prompt)",
+      "type": "debugpy",
+      "request": "launch",
+      "module": "smart_search_agents",
+      "args": ["ask", "--backend", "claude", "${input:question}"],
+      "cwd": "${workspaceFolder}"
+    },
+    {
+      "name": "Curator agent",
+      "type": "debugpy",
+      "request": "launch",
+      "module": "smart_search_agents",
+      "args": ["curate"],
+      "cwd": "${workspaceFolder}"
+    },
+    {
+      "name": "Pytest: current file",
+      "type": "debugpy",
+      "request": "launch",
+      "module": "pytest",
+      "args": ["${file}", "-q"],
+      "cwd": "${workspaceFolder}"
+    }
+  ],
+  "inputs": [
+    { "id": "question", "type": "promptString", "description": "Question about your files" }
+  ]
+}

@@ -1,0 +1,13 @@
+{
+  "version": "2.0.0",
+  "tasks": [
+    { "label": "Run tests", "type": "shell", "command": ".venv/Scripts/python -m pytest -q", "group": "test" },
+    { "label": "Lint (ruff)", "type": "shell", "command": ".venv/Scripts/python -m ruff check src tests" },
+    { "label": "Start daemon", "type": "shell", "command": ".venv/Scripts/python -m smart_search_agents daemon run", "isBackground": true },
+    { "label": "Daemon status", "type": "shell", "command": ".venv/Scripts/python -m smart_search_agents daemon status" },
+    { "label": "Jobs", "type": "shell", "command": ".venv/Scripts/python -m smart_search_agents jobs list" },
+    { "label": "Run index job", "type": "shell", "command": ".venv/Scripts/python -m smart_search_agents jobs run index --wait" },
+    { "label": "Run image scan job", "type": "shell", "command": ".venv/Scripts/python -m smart_search_agents jobs run image_scan --wait" },
+    { "label": "Category suggestions", "type": "shell", "command": ".venv/Scripts/python -m smart_search_agents suggestions list" }
+  ]
+}

@@ -1,0 +1,8 @@
+{
+  "mcpServers": {
+    "smartsearch": {
+      "command": ".venv/Scripts/python.exe",
+      "args": ["-m", "smart_search_agents", "mcp"]
+    }
+  }
+}
