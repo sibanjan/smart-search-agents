@@ -11,11 +11,13 @@ from __future__ import annotations
 
 import hmac
 import json
-from typing import Literal
+from datetime import datetime
+from typing import Annotated, Literal
 
 from mcp.server.mcpserver import MCPServer
 from mcp.server.mcpserver.exceptions import ToolError
 from mcp.types import ToolAnnotations
+from pydantic import BeforeValidator
 
 from .client import DaemonClient, DaemonUnavailable
 from .settings import load_settings, read_or_create_token
@@ -46,20 +48,33 @@ def build_server(client: DaemonClient | None = None) -> MCPServer:
     @mcp.tool(annotations=READ)
     def search_files(
         query: str,
-        ext: list[str] | None = None,
+        ext: Annotated[list[str] | None, BeforeValidator(_ext_list)] = None,
         path: str | None = None,
         since: str | None = None,
         mode: Literal["hybrid", "semantic", "keyword"] = "hybrid",
         limit: int = 10,
-    ) -> list[dict]:
-        """Hybrid search over the user's indexed documents (meaning + keywords + file names).
+    ) -> dict:
+        """Search the user's indexed documents by meaning, keywords and file names.
+        Results come best first (rank 1 is the best match), with a short snippet; call
+        get_chunks on a result's path to read its full text.
 
-        ext: extensions like ["pdf", "docx"]; path: substring the path must contain;
-        since: "7d", "2w" or "2026-01-01". Returns path, snippet, score and which
-        retrievers matched. Use get_chunks on a result for its full text."""
+        Leave ext, path and since out unless the question asks for them: they only remove
+        results. ext: file types the user named; path: part of a folder or file name the
+        user named; since: how recent, e.g. "30d" or "2026-01-01"."""
         results = c().search(query, ext, path, since, mode, min(limit, 50))
-        return [{k: r[k] for k in ("path", "name", "score", "snippet", "matched_by", "modified", "size")}
-                for r in results]
+        hits = [{
+            "rank": i,
+            "path": r["path"],
+            "name": r["name"],
+            "snippet": " ".join(r["snippet"].split()),
+            "matched_by": r["matched_by"],
+            "modified": _date(r["modified"]),
+        } for i, r in enumerate(results, 1)]
+        filters = {k: v for k, v in (("ext", ext), ("path", path), ("since", since)) if v}
+        if not hits and filters:
+            return {"results": [], "note": f"Nothing matched with the filters {filters}. "
+                    "Search again without them."}
+        return {"results": hits}
 
     @mcp.tool(annotations=READ)
     def get_chunks(path: str, query: str | None = None, limit: int = 5) -> dict:
@@ -172,6 +187,21 @@ def build_server(client: DaemonClient | None = None) -> MCPServer:
         )
 
     return mcp
+
+
+def _ext_list(value):
+    """Small models often send ext as "txt", ".pdf", "md,txt" or "['txt']" instead of a
+    list; a validation error only makes them repeat the same call, so accept those."""
+    if isinstance(value, str):
+        value = value.strip("[]").replace(",", " ").split()
+    if isinstance(value, list):
+        value = [str(v).strip("'\" .").lower() for v in value]
+        value = [v for v in value if v] or None
+    return value
+
+
+def _date(ts: float | None) -> str | None:
+    return datetime.fromtimestamp(ts).strftime("%Y-%m-%d") if ts else None
 
 
 class _ToolClient:

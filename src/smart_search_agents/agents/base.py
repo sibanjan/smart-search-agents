@@ -10,6 +10,8 @@ from .llm import ChatBackend, ToolResult
 from .tools import ToolBox
 
 FINISH_NOTE = "Tool budget used up. Stop calling tools and give your final answer now."
+NO_ANSWER = ("No answer: the assistant reached its search limit before answering. Try "
+             "different words, or a stronger model in Settings.")
 
 
 @dataclass
@@ -29,11 +31,22 @@ async def run_agent(
     on_event: Callable[[str, dict], None] | None = None,
 ) -> AgentResult:
     emit = on_event or (lambda kind, data: None)
+    streamed = [False]
+
+    def on_text(text: str) -> None:
+        streamed[0] = True
+        emit("text", {"text": text})
+
+    if on_event is not None and hasattr(llm, "on_text"):
+        llm.on_text = on_text
     llm.start(system, tools.specs)
     turn = await asyncio.to_thread(llm.send_user, task)
     log: list[dict] = []
     rounds = 0
     while turn.tool_calls:
+        if streamed[0]:
+            emit("text_reset", {})  # text written before tool calls is not the answer
+            streamed[0] = False
         rounds += 1
         results: list[ToolResult] = []
         for call in turn.tool_calls:
@@ -47,5 +60,6 @@ async def run_agent(
             # The model ignored the note; answer with no further tool access.
             turn.tool_calls = []
             turn.stop = "max_rounds"
+            turn.text = turn.text.strip() or NO_ANSWER
     emit("answer", {"text": turn.text})
     return AgentResult(turn.text, rounds, turn.stop, log)

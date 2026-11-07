@@ -50,6 +50,41 @@ Open http://127.0.0.1:8765 for the web UI: **Files**, **Images** and **Settings*
 server authenticate with the token in `~/.smartsearch/token` (created on first run); the browser
 gets it as a same-site cookie.
 
+## First run and choosing an assistant
+
+The first time the page opens it shows **Setup**: the folders to search and the assistant. The
+same choice is in **Settings → AI assistant**. The options and their descriptions live in
+[agents/catalog.py](src/smart_search_agents/agents/catalog.py):
+
+| Option | Where it runs | Notes |
+|---|---|---|
+| No assistant | — | Search and images only; Ask AI is hidden |
+| Qwen3 (4B) | This computer (Ollama) | 2.5 GB; best local answers (10/10 in our test) but 2-12 min per question |
+| Llama 3.2 (3B) | This computer (Ollama) | 2.0 GB; under a minute per question; 8/10 in our test |
+| Llama 3.1 (8B) | This computer (Ollama) | 4.9 GB, 16 GB RAM recommended; 5/10 in our test |
+| Claude Opus 5.5 / Sonnet 5.5 / Haiku 5.5 | Anthropic | Needs an API key; question and excerpts are sent to Anthropic; cost estimates shown |
+
+Local models can be downloaded from the page (through Ollama, with progress). Setup will not
+finish with a model that is not downloaded or a Claude choice without a key.
+
+The local numbers come from a small benchmark (five questions with known answers, twice each,
+on an Intel Core Ultra 7 laptop on battery). No local model could suggest image categories;
+that needs Claude. Claude was not part of the benchmark.
+
+## In the web UI
+
+- **Ask AI** runs the Ask agent: you see each search and file it reads, the answer streams in, and
+  the footer says which model answered and whether excerpts left the computer. **Stop** ends it.
+- **Images → Category suggestions** runs the Curator and lists its proposals with a preview (how
+  many images would move, from where, with examples). **Accept** re-sorts the images; nothing
+  changes before that. Small local models often stop before suggesting anything; Claude does
+  this task much better.
+- **Settings → Recent activity** lists index and scan jobs, with **Cancel** for running ones.
+
+The agents still reach the index only through MCP: the daemon gives each run an in-process MCP
+server that calls its own HTTP API, and streams the run to the page as server-sent events
+(`/api/agent/ask?q=`, `/api/agent/curate`).
+
 ## Settings
 
 The Settings page edits the active `config.yaml` (the first save keeps a `.bak` copy, because YAML
@@ -127,6 +162,7 @@ src/smart_search_agents/
     watch.py         watchdog -> index_paths jobs (debounced 2 s)
     curation.py      preview_category, category_suggestions
     config_edit.py   Settings page: checks each setting, saves it, applies it
+    agent_runner.py  runs the agents for the UI and streams their events
     service.py       FastAPI: SmartSearch API + UI, jobs, chunks, SQL, config, suggestions
     main.py          wires it together; pid file
   mcp_server.py      MCPServer (mcp 2.x) tools, resources, prompts

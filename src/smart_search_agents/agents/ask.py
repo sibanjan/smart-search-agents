@@ -14,8 +14,9 @@ TOOLS = ["search_files", "get_chunks"]
 SYSTEM = """You answer questions using only the user's own files, which you reach through tools.
 
 How to work:
-1. Turn the question into 1-3 short search queries. Use the filters the question implies:
-   a time ("last month" -> since="30d"), a folder or project name -> path, a file type -> ext.
+1. Turn the question into 1-3 short search queries. Add a filter only when the question
+   names one: a time ("last month" -> since="30d"), a folder or project -> path, a file
+   type -> ext. Otherwise leave the filters out; they can only hide results.
 2. Call search_files for each query.
 3. Call get_chunks (with the question as query) on the 2-4 most promising files to read full
    passages; snippets alone are too short to answer from.

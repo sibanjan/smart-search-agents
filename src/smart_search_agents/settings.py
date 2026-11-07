@@ -28,11 +28,12 @@ KEY_NAME = "anthropic_api_key"
 class DaemonSettings:
     host: str = "127.0.0.1"
     port: int = 8765
+    setup_complete: bool = False  # the first-run Setup screen has been finished
 
 
 @dataclass
 class AgentSettings:
-    backend: str = "ollama"  # "ollama" (local) | "claude" (cloud: excerpts leave the laptop)
+    backend: str = "ollama"  # "ollama" (local) | "claude" (cloud: excerpts leave the laptop) | "off"
     model: str = "llama3.2"  # Ollama model
     claude_model: str = "claude-opus-5-5"
     claude_effort: str = "medium"  # low | medium | high | xhigh | max

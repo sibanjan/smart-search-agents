@@ -9,7 +9,7 @@ from __future__ import annotations
 import json
 import uuid
 from dataclasses import dataclass, field
-from typing import Protocol
+from typing import Callable, Protocol
 
 import httpx
 
@@ -45,6 +45,7 @@ class Turn:
 class ChatBackend(Protocol):
     name: str
     local: bool  # False = prompts and tool results leave the laptop
+    on_text: Callable[[str], None] | None  # set to stream text as it is written
 
     def start(self, system: str, tools: list[ToolSpec]) -> None: ...
 
@@ -57,6 +58,7 @@ class OllamaBackend:
     """Ollama's /api/chat with tools. Runs entirely on this machine."""
 
     local = True
+    on_text: Callable[[str], None] | None = None
 
     def __init__(self, model: str = "llama3.2", url: str = "http://localhost:11434",
                  timeout: float = 300.0, transport: httpx.BaseTransport | None = None):
@@ -86,19 +88,17 @@ class OllamaBackend:
         return self._chat()
 
     def _chat(self) -> Turn:
-        body = {"model": self.model, "messages": self.messages, "stream": False,
+        body = {"model": self.model, "messages": self.messages, "stream": bool(self.on_text),
                 "options": {"temperature": 0.2}}
         if self.tools:
             body["tools"] = self.tools
         try:
-            r = self.http.post("/api/chat", json=body)
-            r.raise_for_status()
+            msg = self._stream(body) if self.on_text else self._post(body)
         except httpx.HTTPError as exc:
             raise RuntimeError(
                 f"Ollama request failed ({exc}). Is it running? Try: ollama serve  and  "
                 f"ollama pull {self.model}"
             ) from exc
-        msg = r.json()["message"]
         self.messages.append(msg)
         raw = [(tc.get("function", {}).get("name", ""), tc.get("function", {}).get("arguments"))
                for tc in msg.get("tool_calls") or []]
@@ -110,17 +110,58 @@ class OllamaBackend:
         calls = [ToolCall(uuid.uuid4().hex[:12], name, _clean_args(args)) for name, args in raw]
         return Turn(text, calls, "tool_use" if calls else "end")
 
+    def _post(self, body: dict) -> dict:
+        r = self.http.post("/api/chat", json=body)
+        r.raise_for_status()
+        return r.json()["message"]
+
+    def _stream(self, body: dict) -> dict:
+        """Ollama streams one JSON object per line. Text that starts like a JSON object is
+        held back: small models sometimes write a tool call as text (see _inline_call)."""
+        parts: list[str] = []
+        calls: list[dict] = []
+        held = None  # None = undecided, True = holding back, False = streaming
+        with self.http.stream("POST", "/api/chat", json=body) as r:
+            r.raise_for_status()
+            for line in r.iter_lines():
+                if not line.strip():
+                    continue
+                chunk = json.loads(line)
+                if chunk.get("error"):
+                    raise RuntimeError(f"Ollama: {chunk['error']}")
+                m = chunk.get("message") or {}
+                calls += m.get("tool_calls") or []
+                if text := m.get("content"):
+                    parts.append(text)
+                    if held is None and "".join(parts).strip():
+                        held = "".join(parts).lstrip()[:1] in ("{", "`")
+                        if not held:
+                            self.on_text("".join(parts))
+                    elif held is False:
+                        self.on_text(text)
+                if chunk.get("done"):
+                    break
+        msg = {"role": "assistant", "content": "".join(parts)}
+        if calls:
+            msg["tool_calls"] = calls
+        return msg
+
     def _inline_call(self, text: str) -> tuple[str, dict] | None:
-        s = text.strip().strip("`").removeprefix("json").strip()
-        if not (s.startswith("{") and s.endswith("}")):
-            return None
-        try:
-            obj = json.loads(s)
-        except ValueError:
-            return None
+        """A tool call written as a JSON object, alone or at the end of the text (small models
+        write "I'll search again. {"name": "search_files", ...}"). Anything after the object
+        other than whitespace and code fences means it is not a call."""
         names = {t["function"]["name"] for t in self.tools}
-        if isinstance(obj, dict) and obj.get("name") in names:
-            return obj["name"], obj.get("parameters") or obj.get("arguments") or {}
+        decoder = json.JSONDecoder()
+        start = text.find("{")
+        while start != -1:
+            try:
+                obj, end = decoder.raw_decode(text, start)
+            except ValueError:
+                obj, end = None, start + 1
+            if (isinstance(obj, dict) and obj.get("name") in names
+                    and not text[end:].strip().strip("`").strip()):
+                return obj["name"], obj.get("parameters") or obj.get("arguments") or {}
+            start = text.find("{", start + 1)
         return None
 
 
@@ -132,6 +173,7 @@ class ClaudeBackend:
     thinking blocks are preserved."""
 
     local = False
+    on_text: Callable[[str], None] | None = None
     FALLBACK_BETA = "server-side-fallback-2026-07-01"
 
     def __init__(self, model: str = "claude-opus-5-5", effort: str = "medium",
@@ -170,17 +212,26 @@ class ClaudeBackend:
         return self._create()
 
     def _create(self) -> Turn:
-        response = self.client.beta.messages.create(
-            model=self.model,
-            max_tokens=self.max_tokens,
+        request = dict(
             system=self.system,
             tools=self.tools,
             messages=self.messages,
             output_config={"effort": self.effort},
             betas=[self.FALLBACK_BETA],
             fallbacks="default",
+            model=self.model,
         )
-        self.messages.append({"role": "assistant", "content": response.content})
+        if self.on_text:
+            # Streaming: text reaches the UI as it is written. A mid-stream fallback
+            # continues on the same stream; a mid-stream refusal is caught below.
+            with self.client.beta.messages.stream(max_tokens=64000, **request) as stream:
+                for event in stream:
+                    if event.type == "text":
+                        self.on_text(event.text)
+                response = stream.get_final_message()
+        else:
+            response = self.client.beta.messages.create(max_tokens=self.max_tokens, **request)
+        self.messages.append({"role": "assistant", "content": _echoable(response.content)})
         text = "".join(b.text for b in response.content if b.type == "text")
         if response.stop_reason == "refusal":
             return Turn(text or "The model declined this request.", [], "refusal")
@@ -189,6 +240,16 @@ class ClaudeBackend:
         if response.stop_reason == "max_tokens":
             return Turn(text, [], "max_tokens")  # never run a possibly truncated tool call
         return Turn(text, calls, "tool_use" if calls else "end")
+
+
+def _echoable(content: list) -> list:
+    """After a fallback in the middle of a turn, the blocks the declining model wrote before
+    the last `fallback` marker are not sent back, except its text. Before that boundary
+    there are no paired server-tool blocks here (this agent uses client tools only)."""
+    cut = max((i for i, b in enumerate(content) if b.type == "fallback"), default=-1)
+    if cut < 0:
+        return content  # the usual case: sent back exactly as received
+    return [b for i, b in enumerate(content) if i > cut or b.type == "text"]
 
 
 _EMPTY = {"null", "none", "undefined", ""}
@@ -216,4 +277,6 @@ def make_backend(settings) -> ChatBackend:
         return ClaudeBackend(a.claude_model, a.claude_effort, api_key=get_claude_key())
     if a.backend == "ollama":
         return OllamaBackend(a.model, settings.core.ollama_url)
-    raise ValueError(f"agents.backend must be 'ollama' or 'claude', not {a.backend!r}")
+    if a.backend == "off":
+        raise RuntimeError("The assistant is turned off. Choose one in Settings.")
+    raise ValueError(f"agents.backend must be 'ollama', 'claude' or 'off', not {a.backend!r}")

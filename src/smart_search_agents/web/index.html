@@ -81,6 +81,35 @@
   .savebar { position: sticky; bottom: 0; background: var(--bg); padding: 10px 0; display: flex; gap: 12px; align-items: center; }
   .savebar button { padding: 9px 22px; }
   .savebar span { color: var(--muted); font-size: 12px; word-break: break-all; }
+  .answer .steps { color: var(--muted); font-size: 13px; margin-bottom: 8px; white-space: normal; }
+  .answer .steps div::before { content: "› "; }
+  .answer .foot { color: var(--muted); font-size: 12px; margin-top: 10px; white-space: normal; }
+  .answer .foot.cloud { color: inherit; }
+  .muted { color: var(--muted); }
+  .job { display: flex; gap: 10px; align-items: baseline; padding: 6px 0; border-top: 1px solid var(--line); font-size: 13px; }
+  .job .what { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .job .st { font-size: 11px; padding: 1px 8px; border-radius: 999px; background: var(--accent-soft); color: var(--accent); }
+  .job .st.failed { background: var(--mark); color: var(--ink); }
+  .job button { padding: 2px 10px; font-size: 12px; }
+  .sugg { border-top: 1px solid var(--line); padding: 12px 0; }
+  .sugg .thumbs { display: flex; gap: 6px; margin: 8px 0; overflow-x: auto; }
+  .sugg .thumbs img { width: 64px; height: 64px; object-fit: cover; border-radius: 6px; background: var(--line); }
+  .log { color: var(--muted); font-size: 12px; margin-top: 8px; }
+  .choices { display: grid; grid-template-columns: repeat(auto-fill, minmax(260px, 1fr)); gap: 10px; }
+  .choice { border: 1px solid var(--line); border-radius: 12px; padding: 12px 14px; cursor: pointer; background: var(--bg); }
+  .choice:hover { border-color: var(--muted); }
+  .choice.on { border: 2px solid var(--accent); padding: 11px 13px; background: var(--panel); }
+  .choice .t { font-weight: 600; display: flex; gap: 8px; align-items: baseline; flex-wrap: wrap; }
+  .choice .badge { font-size: 11px; font-weight: 600; padding: 1px 8px; border-radius: 999px; background: var(--accent-soft); color: var(--accent); }
+  .choice .tl { font-size: 13px; color: var(--muted); margin: 2px 0 6px; }
+  .choice ul { margin: 0 0 6px; padding-left: 18px; font-size: 13px; }
+  .choice .priv { font-size: 12px; color: var(--muted); }
+  .choice .priv.cloud { color: inherit; background: var(--mark); border-radius: 6px; padding: 2px 6px; display: inline-block; }
+  .choice .act { margin-top: 8px; font-size: 13px; }
+  .choice .act button { padding: 5px 12px; font-size: 13px; }
+  .bar { height: 6px; border-radius: 3px; background: var(--line); overflow: hidden; margin-top: 6px; }
+  .bar div { height: 100%; background: var(--accent); width: 0; transition: width .3s; }
+  .keybox { margin-top: 12px; }
   .status { position: fixed; bottom: 12px; right: 16px; font-size: 12px; color: var(--muted);
             max-width: 60vw; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
   @media (max-width: 600px) { .cat-row { grid-template-columns: 1fr; } }
@@ -94,6 +123,18 @@
 
   <nav class="views"><a id="vFiles" class="on">Files</a><a id="vImages">Images</a><a id="vSettings">Settings</a></nav>
 
+  <section id="setupView" class="hidden">
+    <div class="card"><h2>Welcome to SmartSearch</h2>
+      <p>Find anything in your files by meaning, keywords or name, and browse your pictures by what they show.</p>
+      <div class="notice">The first time, SmartSearch downloads the two AI models it uses to read your files and pictures (about 700 MB). After that they run on this computer, and your files are not sent anywhere, unless you choose a Claude assistant below.</div></div>
+    <div class="card"><h2>1. Folders to search</h2><p>One full path per line. SmartSearch only reads these folders and never moves or changes your files.</p>
+      <div class="field" data-field="roots"><textarea id="setupRoots"></textarea><div class="err"></div></div></div>
+    <div class="card"><h2>2. Choose an assistant</h2><p>The assistant answers questions from your files. You can change this later in Settings.</p>
+      <div id="setupChooser"></div></div>
+    <div id="setupNotice"></div>
+    <div class="savebar"><button class="primary" id="finishSetup">Start SmartSearch</button><span>You can change all of this later in Settings.</span></div>
+  </section>
+
   <section id="settingsView" class="hidden">
     <div id="notice"></div>
     <div id="settingsForm"></div>
@@ -101,6 +142,7 @@
   </section>
 
   <section id="imagesView" class="hidden">
+    <div id="suggest"></div>
     <div class="cats" id="cats"></div>
     <div class="meta" id="imgMeta"></div>
     <button id="scanBtn" class="hidden" style="padding:8px 16px;margin-bottom:12px">Scan images now</button>
@@ -111,7 +153,7 @@
   <form id="f">
     <input id="q" type="search" placeholder="e.g. invoice from the plumber last spring" autofocus autocomplete="off" />
     <button class="primary" type="submit">Search</button>
-    <button type="button" id="askBtn" title="Answer with a local LLM (Ollama)">Ask AI</button>
+    <button type="button" id="askBtn" title="The assistant searches and reads your files to answer (choose it in Settings)">Ask AI</button>
   </form>
 
   <div class="filters">
@@ -196,16 +238,66 @@ async function search(e) {
   render(data.results, q);
 }
 
-async function ask() {
+let askSource = null;
+const base = (p) => p.split(/[\\/]/).pop();
+
+function stepText(name, args) {
+  if (name === "search_files") {
+    const only = [args.ext && [].concat(args.ext).length ? "only " + [].concat(args.ext).join(", ") : "",
+                  args.path ? `in “${args.path}”` : "", args.since ? `since ${args.since}` : ""].filter(Boolean);
+    return `Searching for “${args.query || ""}”` + (only.length ? ` (${only.join(", ")})` : "");
+  }
+  if (name === "get_chunks") return args.path ? `Reading ${base(args.path)}` : "Reading a file";
+  return name.replace(/_/g, " ");
+}
+
+function stopAsk() {
+  if (askSource) askSource.close();
+  askSource = null;
+  $("askBtn").textContent = "Ask AI";
+}
+
+function ask() {
+  if (askSource) { stopAsk(); $("ansFoot").textContent = "Stopped."; return; }
   const q = $("q").value.trim();
   if (!q) return;
-  $("answer").innerHTML = `<div class="answer">Thinking…</div>`;
-  const res = await fetch("/api/ask?" + new URLSearchParams({ q }));
-  const data = await res.json();
-  if (!res.ok) { $("answer").innerHTML = `<div class="answer">${esc(data.detail || "Error")}</div>`; return; }
-  $("answer").innerHTML = `<div class="answer">${esc(data.answer)}</div>`;
-  $("meta").textContent = "Sources";
-  render(data.sources, q);
+  $("results").innerHTML = ""; $("meta").textContent = "";
+  $("answer").innerHTML = `<div class="answer"><div class="steps" id="steps"></div><div id="ansText">Starting…</div><div class="foot" id="ansFoot"></div></div>`;
+  $("askBtn").textContent = "Stop";
+  const read = new Map();
+  let text = "", who = null;
+  const es = askSource = new EventSource("/api/agent/ask?" + new URLSearchParams({ q }));
+  const on = (kind, fn) => es.addEventListener(kind, (e) => fn(JSON.parse(e.data)));
+  on("start", (d) => {
+    who = d;
+    $("ansText").textContent = "";
+    $("ansFoot").textContent = `Working with ${d.model}${d.local ? " on this computer" : ""}…`;
+  });
+  on("tool", (d) => {
+    $("steps").insertAdjacentHTML("beforeend", `<div>${esc(stepText(d.name, d.args))}</div>`);
+    if (d.name === "get_chunks" && d.args.path) read.set(d.args.path, base(d.args.path));
+  });
+  on("text", (d) => { text += d.text; $("ansText").textContent = text; });
+  on("text_reset", () => { text = ""; $("ansText").textContent = ""; });
+  on("answer", (d) => { $("ansText").textContent = d.text || "(no answer)"; });
+  on("done", (d) => {
+    stopAsk();
+    const where = who.local ? "on this computer" : "· the excerpts it read were sent to Anthropic";
+    $("ansFoot").className = "foot" + (who.local ? "" : " cloud");
+    $("ansFoot").textContent = `Answered by ${who.model} ${where}` + (d.stop === "max_rounds" ? " · stopped at the search limit" : "");
+    if (read.size) {
+      $("meta").textContent = "Files the assistant read";
+      $("results").innerHTML = [...read].map(([path, name]) => `<div class="result">
+        <div class="name" data-path="${esc(path)}">${esc(name)}</div><div class="path">${esc(path.slice(0, path.length - name.length))}</div>
+        <div class="tags"><span class="spacer"></span><a data-reveal="${esc(path)}">show in folder</a></div></div>`).join("");
+    }
+  });
+  on("error", (d) => {
+    stopAsk();
+    $("ansText").textContent = d.message;
+    $("ansFoot").textContent = "The assistant could not answer. Search still works; you can change the assistant in Settings.";
+  });
+  es.onerror = () => { if (askSource === es) { stopAsk(); $("ansFoot").textContent = "The connection to SmartSearch was lost."; } };
 }
 
 async function openFile(path, reveal) {
@@ -231,9 +323,11 @@ async function loadCategories() {
     $("imgMeta").textContent = "No images yet. Scan your folders to find and group them.";
     $("grid").innerHTML = "";
     $("scanBtn").classList.remove("hidden");
+    $("suggest").innerHTML = "";
     return;
   }
   $("scanBtn").classList.add("hidden");
+  loadSuggestions();
   $("cats").innerHTML = [`<button data-cat="" class="${activeCat ? "" : "on"}">All ${total}</button>`]
     .concat(names.map((n) => `<button data-cat="${esc(n)}" class="${n === activeCat ? "on" : ""}">${esc(n)} ${categories[n]}</button>`))
     .join("");
@@ -260,9 +354,9 @@ async function loadImages() {
 
 function showView(view) {
   for (const [name, section, link] of [["files", "filesView", "vFiles"], ["images", "imagesView", "vImages"],
-                                       ["settings", "settingsView", "vSettings"]]) {
+                                       ["settings", "settingsView", "vSettings"], ["setup", "setupView", null]]) {
     $(section).classList.toggle("hidden", view !== name);
-    $(link).classList.toggle("on", view === name);
+    if (link) $(link).classList.toggle("on", view === name);
   }
   if (view === "images") loadCategories();
   if (view === "settings") loadSettings();
@@ -299,14 +393,8 @@ const LAYOUT = [
     { k: "image_min_size_kb", label: "Smallest image to include (KB)", type: "number", step: "any", help: "Skips icons and small thumbnails." },
   ]},
   { title: "Image categories", note: "Describe what the image shows, not why you have it.", custom: categoriesEditor },
-  { title: "AI assistant", note: "Used by Ask. Search and images work without it.", fields: [
-    { k: "agents.backend", label: "Run the assistant on", type: "select",
-      options: [["This computer (Ollama)", "ollama"], ["Claude (cloud)", "claude"]] },
-    { k: "agents.model", label: "Ollama model", type: "text", only: () => backend() === "ollama", help: "Needs Ollama installed, with this model pulled." },
-    { k: "agents.claude_model", label: "Claude model", type: "text", only: () => backend() === "claude" },
-    { k: "agents.claude_effort", label: "Claude effort", type: "select", only: () => backend() === "claude",
-      options: ["low", "medium", "high", "xhigh", "max"].map((o) => [o, o]) },
-  ], custom: claudeKeyEditor },
+  { title: "AI assistant", note: "Used by Ask AI and category suggestions. Search and images work without it.",
+    custom: () => `<div id="settingsChooser"></div>` },
   { title: "Schedule", note: "Changed files are picked up as you save them. A scheduled run catches anything missed while SmartSearch was closed.", fields: [
     { k: "schedule.index", label: "Check all files", type: "cron", presets: CRON.index },
     { k: "schedule.image_scan", label: "Check all images", type: "cron", presets: CRON.image_scan },
@@ -329,14 +417,14 @@ const LAYOUT = [
     { k: "image_model", label: "Image model", type: "text", help: "Changing this clears the image index." },
     { k: "batch_size", label: "Embedding batch size", type: "number" },
     { k: "ollama_url", label: "Ollama address", type: "text" },
+    { k: "agents.claude_effort", label: "Claude effort", type: "select", options: ["low", "medium", "high", "xhigh", "max"].map((o) => [o, o]), help: "Higher thinks longer and costs more." },
     { k: "agents.max_rounds", label: "Assistant: search rounds per question", type: "number" },
     { k: "agents.context_chars", label: "Assistant: characters per tool result (Ollama)", type: "number" },
     { k: "daemon.port", label: "Port", type: "number", help: "Takes effect after a restart." },
   ]},
 ];
 const CLEARS_INDEX = { embedder: "file", model_name: "file", image_model: "image" };
-let loaded = null, keySet = false;
-const backend = () => { const el = document.querySelector('[data-key="agents.backend"]'); return el ? el.value : loaded.values["agents.backend"]; };
+let loaded = null;
 
 function fieldHtml(f) {
   const v = loaded.values[f.k], id = `data-key="${esc(f.k)}"`;
@@ -379,20 +467,11 @@ const catRow = (n, p) => `<div class="cat-row"><input placeholder="name" value="
 const categoriesValue = () => Object.fromEntries([...document.querySelectorAll("#catRows .cat-row")]
   .map((r) => [r.children[0].value.trim(), r.children[1].value.trim()]).filter(([n, p]) => n || p));
 
-function claudeKeyEditor() {
-  return `<div id="claudeBox" class="${backend() === "claude" ? "" : "hidden"}">
-    <div class="notice warn">With Claude on, the question and the file excerpts the assistant reads are sent to Anthropic. Everything else stays on this computer.</div>
-    <div class="field"><label>Claude API key</label>
-      <div class="row"><input type="password" id="claudeKey" autocomplete="off" placeholder="${keySet ? "A key is saved" : "sk-ant-..."}"/>
-        <button type="button" id="saveKey">Save key</button>
-        <button type="button" id="delKey" class="${keySet ? "" : "hidden"}">Remove</button></div>
-      <div class="help">Kept in Windows Credential Manager, not in the config file.</div></div></div>`;
-}
-
 const maintenance = `<div class="card"><h2>Maintenance</h2><p>Runs in the background. Progress shows in the bottom corner.</p>
   <div class="row"><button type="button" data-job="index">Check files now</button>
   <button type="button" data-job="image_scan">Check images now</button>
-  <button type="button" data-job="rebuild">Rebuild file index</button></div></div>`;
+  <button type="button" data-job="rebuild">Rebuild file index</button></div>
+  <h2 style="margin-top:18px">Recent activity</h2><div id="jobs" class="muted" style="font-size:13px">Loading…</div></div>`;
 
 function renderSettings() {
   $("settingsForm").innerHTML = LAYOUT.map((sec) => {
@@ -401,11 +480,13 @@ function renderSettings() {
     return `<div class="card"><h2>${esc(sec.title)}</h2>${sec.note ? `<p>${esc(sec.note)}</p>` : `<p></p>`}${body}</div>`;
   }).join("") + maintenance;
   $("cfgFile").textContent = "Saved to " + loaded.config_file;
+  renderChooser("settingsChooser");
+  loadJobs();
 }
 
 async function loadSettings() {
   const data = await (await fetch("/api/settings")).json();
-  loaded = data; keySet = data.claude_key_set;
+  loaded = data;
   renderSettings();
   showRestart(data.restart_required);
   showPrivacy();
@@ -426,7 +507,9 @@ function collectChanges() {
   }
   const cats = categoriesValue();
   if (JSON.stringify(cats) !== JSON.stringify(loaded.values.image_categories)) changes.image_categories = cats;
-  if (changes["agents.model"]) changes.ollama_model = changes["agents.model"]; // used by Ask until it moves to the agent
+  for (const [k, v] of Object.entries(chooserValue("settingsChooser") || {})) {
+    if (JSON.stringify(v) !== JSON.stringify(loaded.values[k])) changes[k] = v;
+  }
   return changes;
 }
 
@@ -434,6 +517,8 @@ async function saveSettings() {
   document.querySelectorAll(".field .err").forEach((e) => (e.textContent = ""));
   const changes = collectChanges();
   if (!Object.keys(changes).length) { notify("Nothing to save."); return; }
+  const problem = chooserProblem("settingsChooser");
+  if (problem) { notify(problem, true); return; }
   const clears = Object.keys(changes).filter((k) => CLEARS_INDEX[k]).map((k) => CLEARS_INDEX[k]);
   if (clears.length && !confirm(`This clears the ${[...new Set(clears)].join(" and ")} index after a restart. It is rebuilt from your files, which can take a while. Continue?`)) return;
   const res = await fetch("/api/settings", { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify(changes) });
@@ -474,12 +559,6 @@ async function runJob(kind, message) {
 $("saveBtn").addEventListener("click", saveSettings);
 $("settingsForm").addEventListener("change", (e) => {
   const key = e.target.dataset.key;
-  if (key === "agents.backend") {
-    for (const sec of LAYOUT) for (const f of sec.fields || []) {
-      if (f.only) document.querySelector(`[data-field="${f.k}"]`).classList.toggle("hidden", !f.only());
-    }
-    $("claudeBox").classList.toggle("hidden", backend() !== "claude");
-  }
   const custom = key && document.querySelector(`[data-custom="${key}"]`);
   if (custom) custom.classList.toggle("hidden", e.target.value !== "custom");
 });
@@ -491,23 +570,303 @@ $("settingsForm").addEventListener("click", async (e) => {
     if (t.dataset.job === "rebuild" && !confirm("Clear the file index and rebuild it from your files? Search is limited until it finishes.")) return;
     if (await runJob(t.dataset.job)) notify("Started in the background: " + JOB_NAMES[t.dataset.job] + ".");
   }
-  if (t.id === "saveKey") {
-    const res = await fetch("/api/settings/claude_key", { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ key: $("claudeKey").value }) });
-    if (res.ok) { keySet = true; $("claudeKey").value = ""; $("claudeKey").placeholder = "A key is saved"; $("delKey").classList.remove("hidden"); notify("Key saved."); }
-    else notify("Enter a key first.", true);
+});
+
+// ---- category suggestions ----------------------------------------------
+let curating = null, assistantOff = false;
+
+async function loadSuggestions() {
+  const { suggestions } = await (await fetch("/api/suggestions?status=proposed")).json();
+  const cloud = loaded ? loaded.values["agents.backend"] === "claude" : false;
+  const items = suggestions.map((s) => {
+    const p = s.preview || {};
+    const from = Object.entries(p.from || {}).map(([k, n]) => `${k} ${n}`).join(", ");
+    const thumbs = (p.examples || []).slice(0, 8).map((ex) =>
+      `<img loading="lazy" title="${esc(ex.path)}" src="/api/images/thumb?${new URLSearchParams({ path: ex.path, size: 128 })}" alt=""/>`).join("");
+    return `<div class="sugg"><div><b>${esc(s.name)}</b> <span class="muted">“${esc(s.prompt)}”</span></div>
+      ${s.rationale ? `<div class="muted" style="font-size:13px">${esc(s.rationale)}</div>` : ""}
+      <div style="font-size:13px">${p.would_join === undefined ? "" : `Would take ${p.would_join} image${p.would_join === 1 ? "" : "s"}${from ? " from " + esc(from) : ""}.`}</div>
+      <div class="thumbs">${thumbs}</div>
+      <div class="row"><button type="button" class="primary" data-accept="${s.id}">Accept</button><button type="button" data-reject="${s.id}">Reject</button></div></div>`;
+  }).join("");
+  if (assistantOff && !items) { $("suggest").innerHTML = ""; return; }
+  $("suggest").innerHTML = `<div class="card"><h2>Category suggestions</h2>
+    <p>The curator looks at groups of images that fit no category and proposes new ones. Nothing changes until you accept.${cloud ? " With Claude on, it sends image file names and folder names to Anthropic." : ""}</p>
+    ${items || `<div class="muted" style="font-size:13px">No suggestions waiting.</div>`}
+    <div class="row" style="margin-top:10px"><button type="button" id="curateBtn">${curating ? "Stop" : "Suggest new categories"}</button></div>
+    <div class="log" id="curateLog"></div></div>`;
+}
+
+function curate() {
+  if (curating) { curating.close(); curating = null; loadSuggestions(); return; }
+  const es = curating = new EventSource("/api/agent/curate");
+  $("curateBtn").textContent = "Stop";
+  const log = (t) => { const el = $("curateLog"); if (el) el.textContent = t; };
+  const on = (kind, fn) => es.addEventListener(kind, (e) => fn(JSON.parse(e.data)));
+  on("start", (d) => log(`Working with ${d.model}…`));
+  on("tool", (d) => log(d.name === "preview_category" ? `Trying “${d.args.name}”…` :
+                        d.name === "suggest_category" ? `Suggesting “${d.args.name}”` : stepText(d.name, d.args) + "…"));
+  const before = document.querySelectorAll("#suggest .sugg").length;
+  let said = "";
+  on("answer", (d) => { said = d.text || ""; });
+  const end = (msg) => { es.close(); curating = null; loadSuggestions().then(() => log(msg)); };
+  on("done", async () => {
+    es.close(); curating = null;
+    await loadSuggestions();
+    const added = document.querySelectorAll("#suggest .sugg").length - before;
+    log(added > 0 ? `Added ${added} suggestion${added === 1 ? "" : "s"}.`
+      : "No new suggestions this time. Small local models often stop before suggesting anything; Claude (in Settings) does this task much better."
+        + (said ? " The curator said: " + said.slice(0, 300) + (said.length > 300 ? "…" : "") : ""));
+  });
+  on("error", (d) => end(d.message));
+  es.onerror = () => { if (curating === es) end("The connection to SmartSearch was lost."); };
+}
+
+$("suggest").addEventListener("click", async (e) => {
+  const t = e.target;
+  if (t.id === "curateBtn") return curate();
+  const id = t.dataset.accept || t.dataset.reject;
+  if (!id) return;
+  t.disabled = true;
+  const res = await (await fetch(`/api/suggestions/${id}/${t.dataset.accept ? "accept" : "reject"}`, { method: "POST" })).json();
+  if (!t.dataset.accept) return loadSuggestions();
+  t.closest(".sugg").querySelector(".row").innerHTML = `<span class="muted">Accepted. Sorting images…</span>`;
+  status();
+  await waitForJob(res.job && res.job.id);
+  loadCategories();
+});
+
+async function waitForJob(jobId, timeoutMs = 120000) {
+  for (let waited = 0; jobId && waited < timeoutMs; waited += 1000) {
+    const job = await (await fetch(`/api/jobs/${jobId}`)).json();
+    if (!["queued", "running"].includes(job.status)) return job;
+    await new Promise((r) => setTimeout(r, 1000));
   }
-  if (t.id === "delKey") {
-    await fetch("/api/settings/claude_key", { method: "DELETE" });
-    keySet = false; $("claudeKey").placeholder = "sk-ant-..."; t.classList.add("hidden"); notify("Key removed.");
+}
+
+// ---- activity ----------------------------------------------------------
+const STATUS_NAMES = { queued: "waiting", running: "running", done: "done", failed: "failed", cancelled: "cancelled" };
+
+function ago(t) {
+  const s = Math.max(0, Date.now() / 1000 - t);
+  if (s < 60) return "just now";
+  if (s < 3600) return `${Math.round(s / 60)} min ago`;
+  if (s < 86400) return `${Math.round(s / 3600)} h ago`;
+  return new Date(t * 1000).toLocaleDateString();
+}
+
+function summary(job) {
+  if (job.status === "failed") return job.error || "";
+  if (job.status === "running") return job.progress || "";
+  const r = job.report || {};
+  return ["added", "updated", "removed", "indexed", "dropped", "failed", "unchanged"]
+    .filter((k) => typeof r[k] === "number" && r[k] > 0).map((k) => `${r[k]} ${k}`).join(" · ");
+}
+
+async function loadJobs() {
+  const box = $("jobs");
+  if (!box) return;
+  try {
+    const { jobs } = await (await fetch("/api/jobs?limit=8")).json();
+    box.innerHTML = jobs.length ? jobs.map((j) => `<div class="job">
+      <span class="st ${j.status}">${STATUS_NAMES[j.status] || j.status}</span>
+      <span class="what" title="${esc(summary(j))}">${esc(JOB_NAMES[j.kind] || j.kind)} <span class="muted">${esc(summary(j))}</span></span>
+      <span class="muted">${ago(j.finished || j.started || j.created)}</span>
+      ${j.status === "queued" || j.status === "running" ? `<button type="button" data-cancel="${j.id}">Cancel</button>` : ""}</div>`).join("")
+      : "Nothing has run yet.";
+  } catch {}
+}
+
+$("settingsForm").addEventListener("click", async (e) => {
+  if (!e.target.dataset.cancel) return;
+  e.target.disabled = true;
+  await fetch(`/api/jobs/${e.target.dataset.cancel}`, { method: "DELETE" });
+  loadJobs(); status();
+});
+
+// ---- assistant chooser (Setup and Settings) ----------------------------
+const choosers = {};
+
+async function renderChooser(id) {
+  const box = $(id);
+  if (!box) return;
+  const data = await (await fetch("/api/assistant/options")).json();
+  const prev = choosers[id];
+  const cur = data.current;
+  const currentId = cur.backend === "off" ? "off" : cur.backend === "claude" ? "claude:" + cur.claude_model : "ollama:" + cur.model;
+  const known = data.options.some((o) => o.id === currentId);
+  const extra = [...data.ollama.others];
+  if (!known && cur.backend === "ollama") extra.includes(cur.model) || extra.unshift(cur.model);
+  choosers[id] = { data, selected: prev ? prev.selected : currentId, extra, pulling: prev ? prev.pulling : {} };
+  drawChooser(id);
+}
+
+function drawChooser(id) {
+  const c = choosers[id], { data } = c;
+  const cards = data.options.map((o) => cardHtml(id, o)).join("");
+  const other = c.extra.length ? cardHtml(id, { id: "ollama-other", backend: "ollama", title: "Another Ollama model",
+    tagline: "On this computer · a model you already downloaded", details: ["Not tested with SmartSearch"],
+    privacy: "Everything stays on this computer.", downloaded: true }) : "";
+  const sel = selectedOption(id);
+  const needKey = sel && sel.backend === "claude";
+  box(id).innerHTML = `<div class="choices">${cards}${other}</div>
+    <div class="keybox ${needKey ? "" : "hidden"}"><div class="field"><label>Claude API key</label>
+      <div class="row"><input type="password" data-ck="key" autocomplete="off" placeholder="${data.claude_key_set ? "A key is saved" : "sk-ant-..."}"/>
+        <button type="button" data-ck="save">Save key</button>
+        <button type="button" data-ck="del" class="${data.claude_key_set ? "" : "hidden"}">Remove</button></div>
+      <div class="help">Create one at console.anthropic.com. It is kept in Windows Credential Manager, not in the config file.</div></div></div>`;
+}
+const box = (id) => $(id);
+
+function cardHtml(id, o) {
+  const c = choosers[id], on = c.selected === o.id || (o.id === "ollama-other" && c.selected.startsWith("ollama-other"));
+  let act = "";
+  if (o.backend === "ollama" && o.id !== "ollama-other") {
+    const p = c.pulling[o.model];
+    if (!c.data.ollama.running) act = `Needs Ollama, which is not running or not installed. <a href="${esc(c.data.ollama.download_url)}" target="_blank" rel="noopener">Get Ollama</a> · <a data-recheck="1" style="cursor:pointer">Check again</a>`;
+    else if (o.downloaded) act = `<span class="badge">Downloaded</span>`;
+    else if (p) act = `${esc(p.text)}<div class="bar"><div style="width:${p.pct}%"></div></div>`;
+    else act = `<button type="button" data-pull="${esc(o.model)}">Download ${o.download_gb} GB</button>`;
   }
+  if (o.id === "ollama-other") {
+    const cur = c.selected.split("|")[1] || c.extra[0];
+    act = `<select data-other="1">${c.extra.map((m) => `<option ${m === cur ? "selected" : ""}>${esc(m)}</option>`).join("")}</select>`;
+  }
+  if (o.backend === "claude") act = c.data.claude_key_set ? `<span class="badge">Key saved</span>` : `Add your API key below`;
+  return `<div class="choice ${on ? "on" : ""}" data-choice="${esc(o.id)}">
+    <div class="t">${esc(o.title)}${o.recommended ? ` <span class="badge">Best results</span>` : ""}</div>
+    <div class="tl">${esc(o.tagline)}</div>
+    <ul>${o.details.map((d) => `<li>${esc(d)}</li>`).join("")}</ul>
+    <div class="priv ${o.backend === "claude" ? "cloud" : ""}">${esc(o.privacy)}</div>
+    ${act ? `<div class="act">${act}</div>` : ""}</div>`;
+}
+
+function selectedOption(id) {
+  const c = choosers[id];
+  if (!c) return null;
+  if (c.selected.startsWith("ollama-other")) return { id: c.selected, backend: "ollama", model: c.selected.split("|")[1] || c.extra[0], downloaded: true };
+  return c.data.options.find((o) => o.id === c.selected) || null;
+}
+
+function chooserValue(id) {
+  const o = selectedOption(id);
+  if (!o) return null;
+  if (o.backend === "off") return { "agents.backend": "off" };
+  if (o.backend === "claude") return { "agents.backend": "claude", "agents.claude_model": o.model };
+  return { "agents.backend": "ollama", "agents.model": o.model, "ollama_model": o.model };
+}
+
+function chooserProblem(id) {
+  const c = choosers[id], o = selectedOption(id);
+  if (!o) return "";
+  if (o.backend === "claude" && !c.data.claude_key_set) return "Add your Claude API key first, or choose another assistant.";
+  if (o.backend === "ollama" && !c.data.ollama.running) return "Ollama is not running. Install or start it, or choose another assistant.";
+  if (o.backend === "ollama" && !o.downloaded) return `Download ${o.title || o.model} first, or choose another assistant.`;
+  return "";
+}
+
+async function pullModel(id, model) {
+  const c = choosers[id];
+  c.pulling[model] = { text: "Starting download…", pct: 0 };
+  drawChooser(id);
+  try {
+    const res = await fetch("/api/assistant/pull", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ model }) });
+    const reader = res.body.getReader(), dec = new TextDecoder();
+    let buf = "", failed = "";
+    for (;;) {
+      const { value, done } = await reader.read();
+      if (done) break;
+      buf += dec.decode(value, { stream: true });
+      const lines = buf.split("\n"); buf = lines.pop();
+      for (const line of lines) {
+        if (!line.trim()) continue;
+        const m = JSON.parse(line);
+        if (m.error) { failed = m.error; continue; }
+        const pct = m.total ? Math.round(100 * (m.completed || 0) / m.total) : c.pulling[model].pct;
+        const gb = m.total ? ` · ${((m.completed || 0) / 1e9).toFixed(1)} of ${(m.total / 1e9).toFixed(1)} GB` : "";
+        c.pulling[model] = { text: (m.status === "success" ? "Finishing…" : "Downloading") + gb, pct };
+        const bar = document.querySelector(`#${id} [data-choice$="${CSS.escape(model)}"] .bar div`);
+        if (bar) { bar.style.width = pct + "%"; bar.parentElement.previousSibling.textContent = c.pulling[model].text; }
+        else drawChooser(id);
+      }
+    }
+    delete c.pulling[model];
+    await renderChooser(id);
+    if (failed) alert("The download failed: " + failed);
+  } catch (e) {
+    delete c.pulling[model];
+    drawChooser(id);
+    alert("The download stopped: " + e);
+  }
+}
+
+document.addEventListener("click", async (e) => {
+  const holder = e.target.closest("#setupChooser, #settingsChooser");
+  if (!holder) return;
+  const id = holder.id, c = choosers[id], t = e.target;
+  if (t.dataset.pull) return pullModel(id, t.dataset.pull);
+  if (t.dataset.recheck) return renderChooser(id);
+  if (t.dataset.ck === "save") {
+    const key = holder.querySelector('[data-ck="key"]').value.trim();
+    const res = await fetch("/api/settings/claude_key", { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ key }) });
+    if (!res.ok) return alert("Enter a key first.");
+    return renderChooser(id);
+  }
+  if (t.dataset.ck === "del") { await fetch("/api/settings/claude_key", { method: "DELETE" }); return renderChooser(id); }
+  if (t.closest("select, input, a, button")) return;
+  const card = t.closest("[data-choice]");
+  if (!card) return;
+  c.selected = card.dataset.choice === "ollama-other" ? "ollama-other|" + (holder.querySelector("[data-other]") || {}).value : card.dataset.choice;
+  drawChooser(id);
+});
+document.addEventListener("change", (e) => {
+  const holder = e.target.closest("#setupChooser, #settingsChooser");
+  if (holder && e.target.dataset.other) { choosers[holder.id].selected = "ollama-other|" + e.target.value; drawChooser(holder.id); }
+});
+
+// ---- first-run setup -------------------------------------------------
+async function startSetup(settings) {
+  document.querySelector("nav.views").classList.add("hidden");
+  showView("setup");
+  $("setupRoots").value = settings.values.roots.join("\n");
+  renderChooser("setupChooser");
+}
+
+$("finishSetup").addEventListener("click", async () => {
+  document.querySelectorAll("#setupView .err").forEach((e) => (e.textContent = ""));
+  const problem = chooserProblem("setupChooser");
+  if (problem) { $("setupNotice").innerHTML = `<div class="notice warn">${esc(problem)}</div>`; return; }
+  const roots = $("setupRoots").value.split("\n").map((x) => x.trim()).filter(Boolean);
+  const body = { roots, ...chooserValue("setupChooser"), "daemon.setup_complete": true };
+  const res = await fetch("/api/settings", { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
+  const data = await res.json();
+  if (!res.ok) {
+    const errs = data.detail || {};
+    if (errs.roots) document.querySelector('#setupView [data-field="roots"] .err').textContent = errs.roots;
+    $("setupNotice").innerHTML = `<div class="notice warn">${esc(Object.values(errs).join(" "))}</div>`;
+    return;
+  }
+  for (const kind of ["index", "image_scan"]) {
+    await fetch("/api/jobs", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ kind }) });
+  }
+  loaded = null;
+  document.querySelector("nav.views").classList.remove("hidden");
+  await showPrivacy();
+  showView("files");
+  $("meta").textContent = "SmartSearch is reading your folders now. Results appear as files are indexed; progress shows in the bottom corner.";
+  status();
 });
 
 async function showPrivacy() {
   try {
     const s = loaded || await (await fetch("/api/settings")).json();
-    $("privacy").textContent = s.values["agents.backend"] === "claude"
+    const b = s.values["agents.backend"];
+    $("privacy").textContent = b === "claude"
       ? "Search stays on this computer. The assistant sends file excerpts to Anthropic."
       : "Everything stays on this computer.";
+    assistantOff = b === "off";
+    $("askBtn").classList.toggle("hidden", assistantOff);
+    return s;
   } catch {}
 }
 
@@ -517,10 +876,13 @@ async function status() {
     const job = s.running[0];
     const work = job ? `${JOB_NAMES[job.kind] || job.kind}${job.progress ? ": " + job.progress : ""}${s.queued ? ` (+${s.queued} waiting)` : ""} · ` : "";
     $("status").textContent = `${work}${s.index.files} files · ${s.images} images`;
+    if (!$("settingsView").classList.contains("hidden")) loadJobs();
   } catch {}
 }
-showPrivacy();
-if (location.hash === "#settings") showView("settings");
+showPrivacy().then((s) => { if (s && !s.values["daemon.setup_complete"]) startSetup(s); });
+const fromHash = () => { const v = location.hash.slice(1); if (["files", "images", "settings"].includes(v)) showView(v); };
+window.addEventListener("hashchange", fromHash);
+fromHash();
 status(); setInterval(status, 4000);
 </script>
 </body>

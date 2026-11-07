@@ -13,14 +13,19 @@ import sqlite3
 import time
 from pathlib import Path
 
+import httpx
 import numpy as np
 from fastapi import FastAPI, HTTPException, Query, Request
-from fastapi.responses import FileResponse, JSONResponse
+from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
 from pydantic import BaseModel
 from smartsearch.engine import Engine
 from smartsearch.web.app import create_app as create_core_app
 
+from ..agents.catalog import ASSISTANTS, OLLAMA_DOWNLOAD, PULLABLE, has_model
+from ..client import DaemonClient
+from ..mcp_server import build_server
 from ..settings import Settings, get_claude_key, set_claude_key
+from .agent_runner import AgentRunner
 from .config_edit import InvalidSettings, SettingsEditor
 from .curation import Curation
 from .jobs import JobQueue
@@ -52,6 +57,10 @@ class KeyRequest(BaseModel):
     key: str
 
 
+class PullRequest(BaseModel):
+    model: str
+
+
 def create_app(
     engine: Engine,
     jobs: JobQueue,
@@ -61,6 +70,7 @@ def create_app(
     scheduler=None,
     allowed_hosts: set[str] | None = None,
     watcher=None,
+    agents: AgentRunner | None = None,
 ) -> FastAPI:
     app = create_core_app(engine, watch=False, index_on_start=False)
     # Replaced below: the core app re-indexes in a thread of its own (this routes it through
@@ -68,6 +78,9 @@ def create_app(
     app.router.routes = [r for r in app.router.routes
                          if getattr(r, "path", "") not in ("/", "/api/reindex")]
     editor = SettingsEditor(settings, engine, jobs, curation, scheduler, watcher)
+    # The agents call this server back through MCP, like any other MCP client.
+    agents = agents or AgentRunner(settings, lambda: build_server(
+        DaemonClient(base_url=settings.base_url, token=token, settings=settings)))
     hosts = allowed_hosts or {"127.0.0.1", "localhost"}
     started = time.time()
 
@@ -170,6 +183,68 @@ def create_app(
             "agents": {"backend": settings.agents.backend, "model": settings.agents.model,
                        "claude_model": settings.agents.claude_model},
         }
+
+    # ---- agents (server-sent events) --------------------------------------
+    sse = {"Cache-Control": "no-store", "X-Accel-Buffering": "no"}
+
+    @app.get("/api/agent/ask")
+    def agent_ask(q: str):
+        if not q.strip():
+            raise HTTPException(400, "Ask a question")
+        return StreamingResponse(agents.ask(q.strip()), media_type="text/event-stream", headers=sse)
+
+    @app.get("/api/agent/curate")
+    def agent_curate(focus: str | None = None):
+        return StreamingResponse(agents.curate(focus), media_type="text/event-stream", headers=sse)
+
+    # ---- choosing an assistant (Setup and Settings) -----------------------
+    def ollama_models() -> dict[str, str] | None:
+        """Model name -> digest for what Ollama has, or None when it is not running."""
+        try:
+            r = httpx.get(engine.cfg.ollama_url + "/api/tags", timeout=2.0)
+            r.raise_for_status()
+            return {m["name"]: m.get("digest", m["name"]) for m in r.json().get("models", [])}
+        except (httpx.HTTPError, ValueError, KeyError, TypeError):
+            return None
+
+    @app.get("/api/assistant/options")
+    def assistant_options():
+        installed = ollama_models()
+        names = list(installed or {})
+        options = [{**a, "downloaded": has_model(names, a["model"])}
+                   if a["backend"] == "ollama" else a for a in ASSISTANTS]
+        # Other models the user has; a second name for a listed model (same digest) is left out.
+        listed = {installed[n] for n in names for a in ASSISTANTS
+                  if a["backend"] == "ollama" and has_model([n], a["model"])}
+        others = [n for n in names if installed[n] not in listed]
+        return {
+            "options": options,
+            "ollama": {"running": installed is not None, "models": names, "others": others,
+                       "download_url": OLLAMA_DOWNLOAD},
+            "claude_key_set": bool(get_claude_key()),
+            "current": {"backend": settings.agents.backend, "model": settings.agents.model,
+                        "claude_model": settings.agents.claude_model},
+        }
+
+    @app.post("/api/assistant/pull")
+    def pull_model(req: PullRequest):
+        """Download a listed local model through Ollama, streaming its progress lines."""
+        if req.model not in PULLABLE:
+            raise HTTPException(400, "Only the models listed in Setup can be downloaded here")
+        url = engine.cfg.ollama_url + "/api/pull"
+
+        def progress():
+            try:
+                with httpx.stream("POST", url, json={"model": req.model, "stream": True},
+                                  timeout=httpx.Timeout(30.0, read=None)) as r:
+                    r.raise_for_status()
+                    for line in r.iter_lines():
+                        if line.strip():
+                            yield line + "\n"
+            except httpx.HTTPError as exc:
+                yield '{"error": "Could not reach Ollama: %s"}\n' % str(exc).replace('"', "'")
+
+        return StreamingResponse(progress(), media_type="application/x-ndjson", headers=sse)
 
     # ---- settings --------------------------------------------------------
     @app.get("/api/settings")

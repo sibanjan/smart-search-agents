@@ -160,7 +160,7 @@ FIELDS: dict[str, Field] = {
     # AI assistant
     "ollama_url": Field(_url),
     "ollama_model": Field(_text),
-    "agents.backend": Field(_choice("ollama", "claude")),
+    "agents.backend": Field(_choice("ollama", "claude", "off")),
     "agents.model": Field(_text),
     "agents.claude_model": Field(_text),
     "agents.claude_effort": Field(_choice("low", "medium", "high", "xhigh", "max")),
@@ -170,6 +170,7 @@ FIELDS: dict[str, Field] = {
     "schedule.index": Field(_cron),
     "schedule.image_scan": Field(_cron),
     "daemon.port": Field(_number(1024, 65535, int), restart=True),
+    "daemon.setup_complete": Field(_flag),
 }
 
 
@@ -285,8 +286,8 @@ class SettingsEditor:
             section, _, name = key.rpartition(".")
             if FIELDS[key].restart:
                 self.pending[key] = value
-            elif section == "agents":
-                setattr(self.settings.agents, name, value)
+            elif section in ("agents", "daemon"):
+                setattr(getattr(self.settings, section), name, value)
             elif section == "schedule":
                 new_schedule = True
                 if value:

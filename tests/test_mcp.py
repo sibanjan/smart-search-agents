@@ -1,5 +1,7 @@
 """MCP tools end to end: MCP client -> MCP server -> daemon HTTP API -> index (in process)."""
 
+import json
+
 import pytest
 
 from smart_search_agents.agents.ask import TOOLS as ASK_TOOLS
@@ -76,3 +78,22 @@ def test_http_transport_requires_token(server):
         assert wrong.status_code == 401
         ok = http.post("/mcp", json=init, headers={**headers, "authorization": "Bearer s3cret"})
         assert ok.status_code == 200 and "smartsearch" in ok.text
+
+
+async def test_search_results_are_easy_for_small_models(server):
+    async with McpToolBox(["search_files"], server=server) as box:
+        hits = json.loads((await box.call(ToolCall("1", "search_files", {"query": "faithfulness"}))).content)
+        first = hits["results"][0]
+        assert first["rank"] == 1 and "score" not in first  # no raw score to mistake for data
+        assert len(first["modified"]) == 10 and "\r" not in first["snippet"]
+        empty = json.loads((await box.call(ToolCall("2", "search_files",
+                                                    {"query": "faithfulness", "ext": ["pdf"]}))).content)
+        assert empty["results"] == [] and "without them" in empty["note"]
+
+
+@pytest.mark.parametrize("ext", ["md", ".md", "md, txt", "['md']", ["MD"]])
+async def test_search_files_accepts_ext_the_way_small_models_write_it(server, ext):
+    async with McpToolBox(["search_files"], server=server) as box:
+        res = await box.call(ToolCall("1", "search_files", {"query": "faithfulness", "ext": ext}))
+        assert not res.is_error, res.content
+        assert json.loads(res.content)["results"]
