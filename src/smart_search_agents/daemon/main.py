@@ -27,7 +27,8 @@ class Daemon:
         self.watcher = Watcher(self.jobs, self.engine.indexer) if watch else None
         self.token = read_or_create_token(settings.token_path)
         self.app = create_app(
-            self.engine, self.jobs, self.curation, settings, self.token, self.scheduler
+            self.engine, self.jobs, self.curation, settings, self.token, self.scheduler,
+            watcher=self.watcher,
         )
 
     def start_background(self) -> None:

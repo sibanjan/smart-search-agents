@@ -66,10 +66,18 @@ class Watcher:
         self.handler = _Handler(jobs, indexer)
         self.observer = Observer()
         self.observer.daemon = True
-        for root in indexer.cfg.root_paths:
+        self._watch(indexer.cfg.root_paths)
+
+    def _watch(self, roots: list[Path]) -> None:
+        for root in roots:
             if root.is_dir():
                 self.observer.schedule(self.handler, str(root), recursive=True)
                 log.info("watching %s", root)
+
+    def set_roots(self, roots: list[Path]) -> None:
+        """Watch a new set of folders while running (Settings page)."""
+        self.observer.unschedule_all()
+        self._watch(roots)
 
     def start(self) -> None:
         self.observer.start()

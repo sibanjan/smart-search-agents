@@ -22,22 +22,34 @@ log = logging.getLogger(__name__)
 class Scheduler:
     def __init__(self, jobs: JobQueue, schedule: dict[str, str]):
         self.jobs = jobs
-        self.schedule = {k: v for k, v in schedule.items() if k in KINDS}
-        for k in set(schedule) - set(self.schedule):
-            log.warning("schedule: unknown job kind %r ignored", k)
         # coalesce + one instance: a laptop that slept through several slots runs once on wake
         self._sched = BackgroundScheduler(
             job_defaults={"coalesce": True, "max_instances": 1, "misfire_grace_time": 12 * 3600}
         )
+        self._load(schedule)
+
+    def _load(self, schedule: dict[str, str]) -> None:
+        self.schedule = {k: v for k, v in schedule.items() if k in KINDS}
+        for k in set(schedule) - set(self.schedule):
+            log.warning("schedule: unknown job kind %r ignored", k)
         self.triggers = {k: CronTrigger.from_crontab(expr) for k, expr in self.schedule.items()}
 
-    def start(self) -> None:
+    def _add_jobs(self) -> None:
         for kind, trigger in self.triggers.items():
             self._sched.add_job(
                 self.jobs.submit, trigger, args=[kind, {}, "schedule"], id=f"schedule-{kind}"
             )
             log.info("schedule: %s at '%s'", kind, self.schedule[kind])
+
+    def start(self) -> None:
+        self._add_jobs()
         self._sched.start()
+
+    def reschedule(self, schedule: dict[str, str]) -> None:
+        """Replace the cron jobs while running (Settings page)."""
+        self._load(schedule)
+        self._sched.remove_all_jobs()
+        self._add_jobs()
 
     def stop(self) -> None:
         if self._sched.running:

@@ -23,6 +23,7 @@ dependencies = [
     "pyyaml>=6.0",
     "pillow>=10.0",
     "watchdog>=4.0",
+    "keyring>=25.0",
 ]
 
 [project.optional-dependencies]
@@ -34,6 +35,9 @@ ssa = "smart_search_agents.cli:app"
 
 [tool.setuptools.packages.find]
 where = ["src"]
+
+[tool.setuptools.package-data]
+smart_search_agents = ["web/*"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

@@ -135,10 +135,10 @@ class ClaudeBackend:
     FALLBACK_BETA = "server-side-fallback-2026-07-01"
 
     def __init__(self, model: str = "claude-opus-5-5", effort: str = "medium",
-                 max_tokens: int = 16000, client=None):
+                 max_tokens: int = 16000, client=None, api_key: str | None = None):
         import anthropic
 
-        self.client = client or anthropic.Anthropic()
+        self.client = client or anthropic.Anthropic(api_key=api_key)
         self.model = model
         self.name = f"claude:{model}"
         self.effort = effort
@@ -211,7 +211,9 @@ def _clean_args(args) -> dict:
 def make_backend(settings) -> ChatBackend:
     a = settings.agents
     if a.backend == "claude":
-        return ClaudeBackend(a.claude_model, a.claude_effort)
+        from ..settings import get_claude_key
+
+        return ClaudeBackend(a.claude_model, a.claude_effort, api_key=get_claude_key())
     if a.backend == "ollama":
         return OllamaBackend(a.model, settings.core.ollama_url)
     raise ValueError(f"agents.backend must be 'ollama' or 'claude', not {a.backend!r}")

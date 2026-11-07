@@ -68,3 +68,9 @@ def test_preview_then_accept_suggestion(client, jobs):
 def test_daemon_status(client):
     s = client.get("/api/daemon/status").json()
     assert s["images"] == 5 and s["last_done"]["index"]["id"]
+
+
+def test_page_is_never_cached(client):
+    # it carries the session cookie; a cached copy would load with every API call failing
+    r = client.get("/")
+    assert r.headers["cache-control"] == "no-store" and "ssa_session" in r.headers["set-cookie"]

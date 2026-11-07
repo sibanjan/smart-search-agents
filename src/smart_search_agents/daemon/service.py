@@ -15,18 +15,20 @@ from pathlib import Path
 
 import numpy as np
 from fastapi import FastAPI, HTTPException, Query, Request
-from fastapi.responses import JSONResponse
+from fastapi.responses import FileResponse, JSONResponse
 from pydantic import BaseModel
 from smartsearch.engine import Engine
 from smartsearch.web.app import create_app as create_core_app
 
-from ..settings import Settings
+from ..settings import Settings, get_claude_key, set_claude_key
+from .config_edit import InvalidSettings, SettingsEditor
 from .curation import Curation
 from .jobs import JobQueue
 
 QUERY_ROW_LIMIT = 500
 QUERY_TIMEOUT_S = 5.0
 COOKIE = "ssa_session"
+WEB = Path(__file__).parent.parent / "web"
 
 
 class JobRequest(BaseModel):
@@ -46,6 +48,10 @@ class SqlRequest(BaseModel):
     sql: str
 
 
+class KeyRequest(BaseModel):
+    key: str
+
+
 def create_app(
     engine: Engine,
     jobs: JobQueue,
@@ -54,10 +60,14 @@ def create_app(
     token: str,
     scheduler=None,
     allowed_hosts: set[str] | None = None,
+    watcher=None,
 ) -> FastAPI:
     app = create_core_app(engine, watch=False, index_on_start=False)
-    # The core app re-indexes in a thread of its own; route it through the queue instead.
-    app.router.routes = [r for r in app.router.routes if getattr(r, "path", "") != "/api/reindex"]
+    # Replaced below: the core app re-indexes in a thread of its own (this routes it through
+    # the queue), and this project has its own page.
+    app.router.routes = [r for r in app.router.routes
+                         if getattr(r, "path", "") not in ("/", "/api/reindex")]
+    editor = SettingsEditor(settings, engine, jobs, curation, scheduler, watcher)
     hosts = allowed_hosts or {"127.0.0.1", "localhost"}
     started = time.time()
 
@@ -74,6 +84,12 @@ def create_app(
         if request.url.path == "/":
             response.set_cookie(COOKIE, token, httponly=True, samesite="strict")
         return response
+
+    @app.get("/")
+    def index_page():
+        # Never cached: this response hands over the session cookie, which ends with the
+        # browser. A cached page would load without it and every API call would get a 401.
+        return FileResponse(WEB / "index.html", headers={"Cache-Control": "no-store"})
 
     # ---- jobs ------------------------------------------------------------
     @app.get("/api/jobs")
@@ -154,6 +170,30 @@ def create_app(
             "agents": {"backend": settings.agents.backend, "model": settings.agents.model,
                        "claude_model": settings.agents.claude_model},
         }
+
+    # ---- settings --------------------------------------------------------
+    @app.get("/api/settings")
+    def read_settings():
+        return {**editor.read(), "claude_key_set": bool(get_claude_key())}
+
+    @app.put("/api/settings")
+    def update_settings(changes: dict):
+        try:
+            return editor.update(changes)
+        except InvalidSettings as exc:
+            raise HTTPException(400, exc.errors) from exc
+
+    @app.put("/api/settings/claude_key")
+    def save_claude_key(req: KeyRequest):
+        if not req.key.strip():
+            raise HTTPException(400, "The key is empty")
+        set_claude_key(req.key.strip())
+        return {"claude_key_set": True}
+
+    @app.delete("/api/settings/claude_key")
+    def delete_claude_key():
+        set_claude_key(None)
+        return {"claude_key_set": False}
 
     @app.get("/api/daemon/status")
     def daemon_status():

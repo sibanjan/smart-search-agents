@@ -15,8 +15,13 @@ import secrets
 from dataclasses import dataclass, field
 from pathlib import Path
 
+import keyring
 import yaml
+from keyring.errors import KeyringError
 from smartsearch.config import DEFAULT_HOME, Config, config_path_candidates, load_config
+
+KEY_SERVICE = "SmartSearch"
+KEY_NAME = "anthropic_api_key"
 
 
 @dataclass
@@ -84,6 +89,22 @@ def _merge(obj, data):
         if hasattr(obj, k):
             setattr(obj, k, v)
     return obj
+
+
+def get_claude_key() -> str | None:
+    """The saved Claude API key, or None (the SDK then uses ANTHROPIC_API_KEY or a login)."""
+    try:
+        return keyring.get_password(KEY_SERVICE, KEY_NAME)
+    except KeyringError:
+        return None
+
+
+def set_claude_key(key: str | None) -> None:
+    """Keep the key in Windows Credential Manager, never in config.yaml. None removes it."""
+    if key:
+        keyring.set_password(KEY_SERVICE, KEY_NAME, key)
+    elif get_claude_key():
+        keyring.delete_password(KEY_SERVICE, KEY_NAME)
 
 
 def read_or_create_token(path: Path | None = None) -> str:

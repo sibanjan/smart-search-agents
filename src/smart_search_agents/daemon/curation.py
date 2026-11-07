@@ -22,7 +22,7 @@ CREATE TABLE IF NOT EXISTS category_suggestions (
     rationale TEXT,
     evidence TEXT NOT NULL DEFAULT '[]',  -- image paths the proposer looked at
     preview TEXT,                          -- preview_category() result when proposed
-    status TEXT NOT NULL,                  -- proposed | accepted | rejected
+    status TEXT NOT NULL,                  -- proposed | accepted | rejected | removed
     created REAL NOT NULL,
     decided REAL
 );
@@ -125,6 +125,16 @@ class Curation:
         if accept:
             self.engine.cfg.image_categories[s["name"]] = s["prompt"]
         return self.get(sid)
+
+    def retire(self, names: set[str]) -> None:
+        """The user removed these categories in Settings: stop re-adding them at start-up."""
+        with self.store.lock, self.conn:
+            for name in names:
+                self.conn.execute(
+                    "UPDATE category_suggestions SET status='removed' "
+                    "WHERE name=? AND status='accepted'",
+                    (name,),
+                )
 
     def apply_accepted(self) -> None:
         for s in self.list("accepted"):

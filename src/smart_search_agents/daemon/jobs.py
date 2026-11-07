@@ -257,8 +257,20 @@ class JobQueue:
             ctx.report_progress(f"[{i + 1}] {path}")
 
         roots = [Path(r) for r in args["roots"]] if args.get("roots") else None
+        dropped = 0 if roots else self._drop_images_outside_roots()
         rep = self.engine.images.scan(roots, progress=progress)  # also re-classifies
-        return {**rep.__dict__, "categories": self.engine.images.summary()}
+        return {**rep.__dict__, "dropped": dropped, "categories": self.engine.images.summary()}
+
+    def _drop_images_outside_roots(self) -> int:
+        """The core scan only forgets images under the folders it scanned, so images from a
+        folder the user removed in Settings would stay forever. Their labels go by cascade."""
+        roots = self.engine.images.roots
+        rows = self.conn.execute("SELECT id, path FROM images").fetchall()
+        gone = [(r["id"],) for r in rows
+                if not any(Path(r["path"]).is_relative_to(root) for root in roots)]
+        with self.store.lock, self.conn:
+            self.conn.executemany("DELETE FROM images WHERE id=?", gone)
+        return len(gone)
 
     def _run_image_classify(self, args: dict, ctx: JobContext) -> dict:
         return {"categories": self.engine.images.classify()}

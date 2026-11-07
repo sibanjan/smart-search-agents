@@ -46,8 +46,25 @@ ssa jobs list
 ssa query "SELECT category, COUNT(*) FROM image_category_view GROUP BY category"
 ```
 
-Open http://127.0.0.1:8765 for the web UI. The CLI and MCP server authenticate with the token
-in `~/.smartsearch/token` (created on first run); the browser gets it as a same-site cookie.
+Open http://127.0.0.1:8765 for the web UI: **Files**, **Images** and **Settings**. The CLI and MCP
+server authenticate with the token in `~/.smartsearch/token` (created on first run); the browser
+gets it as a same-site cookie.
+
+## Settings
+
+The Settings page edits the active `config.yaml` (the first save keeps a `.bak` copy, because YAML
+comments are not preserved). Each change does what it needs:
+
+| Change | Takes effect |
+|---|---|
+| Folders, file types, size limits | At once, and queues a file check and/or image scan |
+| Image categories and thresholds | At once, and re-sorts images without a re-scan |
+| Search weights, schedule, watched folders, assistant | At once |
+| Text or image model, embedder, port | After a restart; a model change clears that index |
+| Chunk size and overlap | New and changed files; rebuild the index to apply to all |
+
+The Claude API key goes to Windows Credential Manager, never to `config.yaml`. The daemon's host
+and `index_dir` are not editable. Remove a folder and its files leave the index on the next check.
 
 ## Agents
 
@@ -109,6 +126,7 @@ src/smart_search_agents/
     scheduler.py     APScheduler cron + catch-up
     watch.py         watchdog -> index_paths jobs (debounced 2 s)
     curation.py      preview_category, category_suggestions
+    config_edit.py   Settings page: checks each setting, saves it, applies it
     service.py       FastAPI: SmartSearch API + UI, jobs, chunks, SQL, config, suggestions
     main.py          wires it together; pid file
   mcp_server.py      MCPServer (mcp 2.x) tools, resources, prompts
@@ -117,6 +135,7 @@ src/smart_search_agents/
     tools.py         MCP client tool box (allow-listed per agent)
     base.py          agent loop with a round limit
     ask.py, curator.py
+  web/index.html     the UI: Files, Images, Settings
   cli.py             `ssa` commands
 tests/               offline: hash embedder, fake CLIP, scripted LLM
 ```
